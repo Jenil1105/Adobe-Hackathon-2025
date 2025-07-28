@@ -133,10 +133,6 @@ OS: Linux / Windows / macOS (with Docker Desktop)
 👥 Credits
 Built for Adobe Hackathon 2025
 
-Developed by [Your Team Name]
+Developed by Zero Vector
 
-vbnet
-Copy
-Edit
 
-Let me know if you'd like this saved to a `.md` file or bundled with your Docker project!
