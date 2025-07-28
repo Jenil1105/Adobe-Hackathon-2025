@@ -1,6 +1,7 @@
-# PDF Outline Extractor
+# 🏁 Adobe Hackathon 2025 – Round 1A: PDF Outline Extractor
 
 This project extracts hierarchical outlines (headings/subheadings) from PDF files using a machine learning approach with `sentence-transformers` and `scikit-learn`. It's designed to run inside a lightweight, CPU-only Docker environment.
+
 
 ## 🧠 Approach
 
