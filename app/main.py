@@ -1,50 +1,111 @@
 import os
 import json
-from utils import extract_text_lines
-from classify import predict_headings
+import re
+import pdfplumber
+from pathlib import Path
+from utils import (
+    load_models,
+    compute_body_font_size,
+    extract_title_blocks,
+    group_text_blocks,
+    extract_features,
+    is_valid_heading,
+    determine_heading_level,
+    is_header_footer,
+    merge_blocks_if_continuous
+)
+import shutil
 
-INPUT_DIR = "/app/input"
-OUTPUT_DIR = "/app/output"
+def process_pdf(pdf_path, models):
+    title = ""
+    outline = []
 
-def infer_title(lines):
-    """
-    Simple rule: pick the largest font-size line from the first page.
-    """
-    first_page_lines = [l for l in lines if l["page"] == 1]
-    if not first_page_lines:
-        return "Untitled"
+    with pdfplumber.open(pdf_path) as pdf:
+        body_size = compute_body_font_size(pdf)
 
-    first_page_lines.sort(key=lambda x: x["font_size"], reverse=True)
-    return first_page_lines[0]["text"]
+        title_blocks = []
+        if pdf.pages:
+            title_blocks = extract_title_blocks(pdf.pages[0])
+            title = title_blocks['text']
 
-def process_pdf(pdf_path, output_path):
-    lines = extract_text_lines(pdf_path)
-    if not lines:
-        return
+        title_texts = title.strip()
 
-    title = infer_title(lines)
-    outline = predict_headings(lines)
+        for page_num, page in enumerate(pdf.pages, 1):
+            blocks = group_text_blocks(page)
+            if not blocks:
+                continue
 
-    result = {
-        "title": title,
-        "outline": outline
-    }
+            # Sort by reading order
+            blocks.sort(key=lambda b: (b['top'], b['x0']))
+            blocks = merge_blocks_if_continuous(blocks, page.height, False)
+            # for block in blocks:
+            #     print(block['text'])
 
-    with open(output_path, "w") as f:
-        json.dump(result, f, indent=2)
-    print(f"✅ Processed: {os.path.basename(pdf_path)} → {os.path.basename(output_path)}")
+            for i, block in enumerate(blocks):
+                if is_header_footer(block, page.height):
+                    continue
 
+                if not is_valid_heading(block, page_num, body_size):
+                    continue
 
-def main():
-    if not os.path.exists(OUTPUT_DIR):
-        os.makedirs(OUTPUT_DIR)
+                if page_num == 1 and block['text'].strip() in title_texts:
+                    continue
+                
+                prev_block = blocks[i - 1] if i > 0 else None
+                next_block = blocks[i + 1] if i < len(blocks) - 1 else None
 
-    for filename in os.listdir(INPUT_DIR):
-        if filename.lower().endswith(".pdf"):
-            input_path = os.path.join(INPUT_DIR, filename)
-            output_filename = filename.replace(".pdf", ".json")
-            output_path = os.path.join(OUTPUT_DIR, output_filename)
-            process_pdf(input_path, output_path)
+                try:
+                    features = extract_features(
+                        block,
+                        prev_block,
+                        next_block,
+                        body_size,
+                        page.width,
+                        page.height,
+                        models
+                    )
+
+                    if models['classifier_head'].predict([features])[0]:
+                        level = determine_heading_level(block, body_size)
+                        outline.append({
+                            "level": level,
+                            "text": block['text'].strip(),
+                            "page": page_num
+                        })
+                    else:
+                        if re.match(r"^\d+\.", block['text']):
+                            level = determine_heading_level(block, body_size)
+                            outline.append({
+                                "level": level,
+                                "text": block['text'].strip(),
+                                "page": page_num
+                            })
+
+                except Exception:
+                    if re.match(r"^\d+\.", block['text']):
+                        level = determine_heading_level(block, body_size)
+                        outline.append({
+                            "level": level,
+                            "text": block['text'].strip(),
+                            "page": page_num
+                        })
+
+    return {"title": title.strip(), "outline": outline}
+
 
 if __name__ == "__main__":
-    main()
+    model_dir = Path(os.getenv('MODEL_DIR', 'app/models'))
+    models = load_models(model_dir)
+
+    input_dir = 'app/input'
+    output_dir = 'app/output'
+    os.makedirs(output_dir, exist_ok=True)
+
+    for filename in os.listdir(input_dir):
+        if filename.lower().endswith('.pdf'):
+            pdf_path = os.path.join(input_dir, filename)
+            result = process_pdf(pdf_path, models)
+
+            output_path = os.path.join(output_dir, filename.replace('.pdf', '.json'))
+            with open(output_path, 'w') as f:
+                json.dump(result, f, indent=2)
